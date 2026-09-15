@@ -6,4 +6,5 @@ __pycache__/
 result/*
 !result/.gitkeep
 .pytest_cache/
+dist/
 .DS_Store

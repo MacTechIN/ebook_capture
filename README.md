@@ -15,6 +15,22 @@
 
 ```bash
 brew install tesseract
+```
+
+**어디서든 쓰려면 (권장)** — 전역 명령으로 설치합니다.
+
+```bash
+uv build
+uv tool install --force ./dist/ebook_capture-0.1.0-py3-none-any.whl
+ebook-capture --help
+```
+
+설치 후에는 아무 폴더에서나 `ebook-capture` 로 실행하면 되고, 결과는
+**실행한 폴더의 `result/`** 에 저장됩니다. `--out` 으로 바꿀 수 있습니다.
+
+**개발용** — 저장소 안에서 작업할 때.
+
+```bash
 uv venv --python 3.12
 uv pip install -e ".[dev]"
 uv run python scripts/preflight.py   # 권한과 클릭 동작 확인
