@@ -13,7 +13,9 @@ from .pdfbuild import build_pdf, collect_pages
 from .picker import AbortWatcher, pick_point, pick_region
 from .session import SessionConfig, run_session
 
-RESULT_DIR = Path(__file__).resolve().parents[2] / "result"
+# 실행 위치 기준의 상대 경로다. 소스 위치를 기준으로 삼으면 전역 설치했을 때
+# 도구 내부 venv 안에 저장하려 들고, 어디서 실행하든 같은 곳이라 책이 섞인다.
+RESULT_DIR = Path("result")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,7 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quality", type=int, default=95, help="JPEG 품질 (기본 95)")
     p.add_argument("--page-size", choices=["a4"], default=None, help="PDF 페이지 박스를 A4로 배치")
     p.add_argument("--max-pages", type=int, default=2000, help="안전 상한 (기본 2000)")
-    p.add_argument("--resume", metavar="JSON", help="저장된 세션 설정으로 재개")
+    p.add_argument("--resume", metavar="제목|경로", help="저장된 세션으로 재개 (제목만 줘도 됩니다)")
+    p.add_argument("--out", metavar="폴더", default=None,
+                   help="결과를 저장할 폴더 (기본: 현재 폴더의 result)")
     return p
 
 
@@ -105,19 +109,20 @@ def _ask_index(prompt: str, count: int) -> int:
         print(f"  0 부터 {count - 1} 사이의 번호를 입력하세요.")
 
 
-def _resolve_session_path(value: str) -> Path:
+def _resolve_session_path(value: str, root: Path | None = None) -> Path:
     """--resume 인자를 세션 파일 경로로 바꾼다.
 
     경로를 그대로 줘도 되고 제목만 줘도 된다. 제목이면 프로젝트 폴더
     result/<제목>/<제목>.session.json 을 먼저 보고, 없으면 폴더 구조가 생기기 전에
     저장된 result/<제목>.session.json 을 본다.
     """
+    root = RESULT_DIR if root is None else root
     direct = Path(value)
     if direct.is_file():
         return direct
     for candidate in (
-        RESULT_DIR / value / f"{value}.session.json",
-        RESULT_DIR / f"{value}.session.json",
+        root / value / f"{value}.session.json",
+        root / f"{value}.session.json",
     ):
         if candidate.is_file():
             return candidate
@@ -163,10 +168,11 @@ def _configure(args) -> SessionConfig:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     require_permissions()
-    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    result_root = Path(args.out).expanduser() if args.out else RESULT_DIR
+    result_root.mkdir(parents=True, exist_ok=True)
 
     if args.resume:
-        session_path = _resolve_session_path(args.resume)
+        session_path = _resolve_session_path(args.resume, result_root)
         try:
             config = SessionConfig.load(session_path)
         except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -181,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         project_dir = session_path.parent
     else:
         config = _configure(args)
-        project_dir = RESULT_DIR / config.title
+        project_dir = result_root / config.title
 
     # 제목마다 별도 폴더를 둔다. 여러 권을 캡처해도 result/ 가 섞이지 않는다.
     project_dir.mkdir(parents=True, exist_ok=True)

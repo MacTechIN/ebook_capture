@@ -340,3 +340,23 @@ def test_main_resume_continues_inside_the_session_directory(monkeypatch, tmp_pat
     events = _install_fakes(monkeypatch, tmp_path)
     assert main(["--resume", "책"]) == 0
     assert "start_page=2" in events, f"세션 폴더의 기존 2쪽을 못 찾았다: {events}"
+
+
+def test_result_dir_defaults_to_current_working_directory():
+    """전역 설치해도 동작하려면 소스 위치가 아니라 실행 위치 기준이어야 한다."""
+    assert cli_mod.RESULT_DIR == Path("result")
+    assert not cli_mod.RESULT_DIR.is_absolute()
+
+
+def test_parser_has_out_option():
+    assert build_parser().parse_args([]).out is None
+    assert build_parser().parse_args(["--out", "/tmp/어딘가"]).out == "/tmp/어딘가"
+
+
+def test_main_writes_into_the_out_directory(monkeypatch, tmp_path):
+    """--out 을 주면 그 아래에 제목 폴더가 생겨야 한다."""
+    custom = tmp_path / "보관함"
+    events = _install_fakes(monkeypatch, tmp_path)
+    assert main(["--title", "책", "--interval", "0", "--out", str(custom)]) == 0
+    assert (custom / "책" / "책.session.json").exists()
+    assert not (tmp_path / "책").exists(), "--out 을 줬는데 기본 위치에 쓰면 안 된다"
