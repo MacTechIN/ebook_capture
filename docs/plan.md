@@ -1319,7 +1319,10 @@ class FakeCapturer:
         if self.pages is not None:
             shade = self.pages[min(self.calls - 1, len(self.pages) - 1)]
         else:
-            shade = self.calls * 7 % 256
+            # 단계를 53으로 둔다. 7로 두면 RGB->L 변환에서 휘도 차이가 정확히 2.0이
+            # 되어 StillnessDetector의 threshold 2.0에 걸려 "화면이 멈췄다"로
+            # 오판한다. 53이면 휘도 차이가 16 이상이라 확실히 구분된다.
+            shade = self.calls * 53 % 256
         return Image.new("RGB", (60, 60), (shade, 60, 90))
 
 
@@ -1370,30 +1373,38 @@ def test_session_does_not_click_after_final_page(tmp_path):
 
 def test_session_stops_on_stillness_when_ocr_never_reaches_100(tmp_path):
     """OCR이 100%를 못 읽어도 화면이 멈추면 종료해야 한다 (research.md 3.2 폴백)."""
+    clicks = []
     capturer = FakeCapturer(percents=["50%"], pages=[10, 10, 10, 10, 10])
     pages, reason = run_session(
-        _config(stillness_required=3), tmp_path, capturer, lambda p: None, FakeWatcher()
+        _config(stillness_required=3), tmp_path, capturer, clicks.append, FakeWatcher()
     )
     assert reason == StopReason.STILL
     assert pages < 50
+    assert len(clicks) == pages - 1, "멈추기로 한 회차에서는 클릭하지 않아야 한다"
 
 
 def test_session_respects_max_pages(tmp_path):
+    clicks = []
     capturer = FakeCapturer(percents=["50%"])  # 계속 50%, 화면은 매번 바뀜
     pages, reason = run_session(
-        _config(max_pages=5), tmp_path, capturer, lambda p: None, FakeWatcher()
+        _config(max_pages=5), tmp_path, capturer, clicks.append, FakeWatcher()
     )
     assert reason == StopReason.MAX_PAGES
     assert pages == 5
+    assert len(clicks) == 4, "상한에 닿은 회차에서는 클릭하지 않아야 한다"
 
 
 def test_session_aborts_on_esc(tmp_path):
+    clicks = []
     capturer = FakeCapturer(percents=["50%"])
     pages, reason = run_session(
-        _config(max_pages=100), tmp_path, capturer, lambda p: None, FakeWatcher(abort_after=2)
+        _config(max_pages=100), tmp_path, capturer, clicks.append, FakeWatcher(abort_after=2)
     )
     assert reason == StopReason.ABORTED
-    assert pages < 100
+    assert pages == 2
+    # ESC는 이미 클릭한 뒤 다음 회차 시작에서 감지되므로 클릭 수가 쪽 수와 같다.
+    # 다른 종료 사유(clicks == pages - 1)와 다른 이 차이가 정상 동작이다.
+    assert len(clicks) == 2
 ```
 
 - [ ] **Step 2: 테스트 실패 확인**
