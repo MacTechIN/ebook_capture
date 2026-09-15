@@ -194,18 +194,22 @@ def test_main_resume_continues_after_existing_pages(monkeypatch, tmp_path):
 
 def test_main_refuses_to_overwrite_existing_pages(monkeypatch, tmp_path):
     """--resume 없이 같은 제목으로 재실행하면 덮어쓰기 전에 막아야 한다."""
-    (tmp_path / "책_p001.jpg").write_bytes(b"x")
+    project = tmp_path / "책"
+    project.mkdir()
+    (project / "책_p001.jpg").write_bytes(b"x")
     events = _install_fakes(monkeypatch, tmp_path, confirm="n")
     assert main(["--title", "책", "--interval", "0"]) == 1
     assert "watcher_init" not in events
-    assert (tmp_path / "책_p001.jpg").exists(), "취소했는데 파일을 지우면 안 된다"
+    assert (project / "책_p001.jpg").exists(), "취소했는데 파일을 지우면 안 된다"
 
 
 def test_main_deletes_existing_pages_only_after_preview_confirmed(monkeypatch, tmp_path):
     """d로 동의해도 미리보기 확인 전에는 지우지 않는다."""
-    old = tmp_path / "책_p001.jpg"
+    project = tmp_path / "책"
+    project.mkdir()
+    old = project / "책_p001.jpg"
     old.write_bytes(b"x")
-    keep_pdf = tmp_path / "책.pdf"
+    keep_pdf = project / "책.pdf"
     keep_pdf.write_bytes(b"%PDF-1.4\n")
     events = _install_fakes(monkeypatch, tmp_path, confirm=["d", "n"])
     assert main(["--title", "책", "--interval", "0"]) == 1
@@ -214,9 +218,11 @@ def test_main_deletes_existing_pages_only_after_preview_confirmed(monkeypatch, t
 
 def test_main_deletes_existing_pages_after_full_confirmation(monkeypatch, tmp_path):
     """d + y 를 모두 거친 뒤에만 기존 페이지를 지우고 처음부터 시작한다."""
-    old = tmp_path / "책_p001.jpg"
+    project = tmp_path / "책"
+    project.mkdir()
+    old = project / "책_p001.jpg"
     old.write_bytes(b"x")
-    keep = tmp_path / "책.session.json"
+    keep = project / "책.session.json"
     keep.write_text("{}", encoding="utf-8")
     events = _install_fakes(monkeypatch, tmp_path, confirm=["d", "y"])
     assert main(["--title", "책", "--interval", "0"]) == 0
@@ -279,3 +285,58 @@ def test_main_reports_actual_merged_page_count(monkeypatch, tmp_path, capsys):
     assert main(["--title", "책", "--interval", "0"]) == 0
     out = capsys.readouterr().out
     assert "2쪽" in out
+
+
+def test_resolve_session_path_accepts_a_direct_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_mod, "RESULT_DIR", tmp_path)
+    direct = tmp_path / "어딘가.json"
+    direct.write_text("{}", encoding="utf-8")
+    assert cli_mod._resolve_session_path(str(direct)) == direct
+
+
+def test_resolve_session_path_accepts_a_plain_title(tmp_path, monkeypatch):
+    """제목만 줘도 프로젝트 폴더에서 세션 파일을 찾아야 한다."""
+    monkeypatch.setattr(cli_mod, "RESULT_DIR", tmp_path)
+    project = tmp_path / "책"
+    project.mkdir()
+    session = project / "책.session.json"
+    session.write_text("{}", encoding="utf-8")
+    assert cli_mod._resolve_session_path("책") == session
+
+
+def test_resolve_session_path_finds_legacy_flat_layout(tmp_path, monkeypatch):
+    """폴더 구조가 생기기 전에 저장된 세션도 찾아야 한다."""
+    monkeypatch.setattr(cli_mod, "RESULT_DIR", tmp_path)
+    legacy = tmp_path / "책.session.json"
+    legacy.write_text("{}", encoding="utf-8")
+    assert cli_mod._resolve_session_path("책") == legacy
+
+
+def test_main_saves_into_a_per_title_directory(monkeypatch, tmp_path):
+    """제목마다 result/<제목>/ 폴더가 생기고 모든 산출물이 그 안에 들어가야 한다."""
+    events = _install_fakes(monkeypatch, tmp_path)
+    assert main(["--title", "책", "--interval", "0"]) == 0
+    project = tmp_path / "책"
+    assert project.is_dir(), "프로젝트 폴더가 만들어져야 한다"
+    assert (project / "책.session.json").exists()
+    assert (project / "_preview_capture.png").exists()
+    assert (project / "책.pdf").exists()
+    assert not (tmp_path / "책.session.json").exists(), "result/ 바로 아래에 쓰면 안 된다"
+
+
+def test_main_resume_continues_inside_the_session_directory(monkeypatch, tmp_path):
+    """재개는 세션 파일이 있는 폴더에서 이어가야 한다 (제목만 줘도 동작)."""
+    project = tmp_path / "책"
+    project.mkdir()
+    for i in (1, 2):
+        (project / f"책_p{i:03d}.jpg").write_bytes(b"x")
+    SessionConfig(
+        title="책",
+        capture_region=Region(0, 0, 40, 40),
+        progress_region=Region(0, 100, 30, 20),
+        click_point=(10, 10),
+        interval=0.0,
+    ).save(project / "책.session.json")
+    events = _install_fakes(monkeypatch, tmp_path)
+    assert main(["--resume", "책"]) == 0
+    assert "start_page=2" in events, f"세션 폴더의 기존 2쪽을 못 찾았다: {events}"

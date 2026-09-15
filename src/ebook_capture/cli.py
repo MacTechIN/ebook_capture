@@ -105,6 +105,25 @@ def _ask_index(prompt: str, count: int) -> int:
         print(f"  0 부터 {count - 1} 사이의 번호를 입력하세요.")
 
 
+def _resolve_session_path(value: str) -> Path:
+    """--resume 인자를 세션 파일 경로로 바꾼다.
+
+    경로를 그대로 줘도 되고 제목만 줘도 된다. 제목이면 프로젝트 폴더
+    result/<제목>/<제목>.session.json 을 먼저 보고, 없으면 폴더 구조가 생기기 전에
+    저장된 result/<제목>.session.json 을 본다.
+    """
+    direct = Path(value)
+    if direct.is_file():
+        return direct
+    for candidate in (
+        RESULT_DIR / value / f"{value}.session.json",
+        RESULT_DIR / f"{value}.session.json",
+    ):
+        if candidate.is_file():
+            return candidate
+    return direct
+
+
 def _choose_display() -> Region:
     displays = list_displays()
     if not displays:
@@ -147,8 +166,9 @@ def main(argv: list[str] | None = None) -> int:
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.resume:
+        session_path = _resolve_session_path(args.resume)
         try:
-            config = SessionConfig.load(Path(args.resume))
+            config = SessionConfig.load(session_path)
         except (OSError, ValueError, TypeError, KeyError) as exc:
             print(f"세션 파일을 읽을 수 없습니다: {args.resume}")
             print(f"  {exc}")
@@ -157,10 +177,16 @@ def main(argv: list[str] | None = None) -> int:
         if any(d.scale != 1.0 for d in list_displays()):
             print("경고: 현재 디스플레이 배율이 1.00x가 아닙니다.")
             print("  세션 저장 당시와 화면 설정이 다르면 저장된 좌표가 지금 화면과 맞지 않을 수 있습니다.")
+        # 세션 파일이 있는 곳에서 이어간다. 폴더 구조 이전에 저장된 세션도 그대로 동작한다.
+        project_dir = session_path.parent
     else:
         config = _configure(args)
+        project_dir = RESULT_DIR / config.title
 
-    existing = collect_pages(RESULT_DIR, config.title)
+    # 제목마다 별도 폴더를 둔다. 여러 권을 캡처해도 result/ 가 섞이지 않는다.
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = collect_pages(project_dir, config.title)
     start_page = latest_page_number(existing)
     pending_delete: list[Path] = []
 
@@ -181,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         pending_delete = existing
 
     with ScreenCapture() as capturer:
-        for path in save_previews(capturer, config, RESULT_DIR):
+        for path in save_previews(capturer, config, project_dir):
             print(f"  미리보기 저장: {path}")
         try:
             answer = input("\n미리보기가 올바릅니까? 계속하려면 y: ").strip().lower()
@@ -197,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
                 path.unlink()
             start_page = 0
 
-        session_path = RESULT_DIR / f"{config.title}.session.json"
+        session_path = project_dir / f"{config.title}.session.json"
         config.save(session_path)
         print(f"세션 설정 저장: {session_path}")
 
@@ -213,16 +239,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             try:
                 last_page, reason = run_session(
-                    config, RESULT_DIR, capturer, lambda pt: click(*pt), watcher,
+                    config, project_dir, capturer, lambda pt: click(*pt), watcher,
                     on_page=report, start_page=start_page,
                 )
             except KeyboardInterrupt:
                 print("\n사용자가 강제로 중단했습니다 (Ctrl+C).")
-                print(f"  캡처한 이미지와 세션 설정은 {RESULT_DIR} 에 그대로 있습니다. --resume 으로 이어서 계속할 수 있습니다.")
+                print(f"  캡처한 이미지와 세션 설정은 {project_dir} 에 그대로 있습니다. --resume 으로 이어서 계속할 수 있습니다.")
                 return 1
             except Exception as exc:  # noqa: BLE001 - 예상 못 한 오류도 한국어로 안내해야 한다
                 print(f"\n캡처 중 예상치 못한 오류가 발생했습니다: {exc}")
-                print(f"  캡처한 이미지와 세션 설정은 {RESULT_DIR} 에 그대로 있습니다. --resume 으로 이어서 계속할 수 있습니다.")
+                print(f"  캡처한 이미지와 세션 설정은 {project_dir} 에 그대로 있습니다. --resume 으로 이어서 계속할 수 있습니다.")
                 return 1
 
     captured = last_page - start_page
@@ -232,12 +258,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        pdf_path = build_pdf(RESULT_DIR, config.title, page_size=args.page_size)
+        pdf_path = build_pdf(project_dir, config.title, page_size=args.page_size)
     except (ValueError, OSError) as exc:
         print(f"PDF 생성에 실패했습니다: {exc}")
-        print(f"캡처한 이미지는 {RESULT_DIR} 에 그대로 있습니다. 문제를 고친 뒤 다시 시도하세요.")
+        print(f"캡처한 이미지는 {project_dir} 에 그대로 있습니다. 문제를 고친 뒤 다시 시도하세요.")
         return 1
-    merged_pages = len(collect_pages(RESULT_DIR, config.title))
+    merged_pages = len(collect_pages(project_dir, config.title))
     size_mb = pdf_path.stat().st_size / 1e6
     print(f"PDF 생성 완료: {pdf_path}  ({merged_pages}쪽, {size_mb:.1f} MB)")
     return 0
