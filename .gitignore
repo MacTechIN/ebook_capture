@@ -1,8 +1,9 @@
 .venv/
 __pycache__/
 *.pyc
-result/*.jpg
-result/*.pdf
-result/*.session.json
-result/*.png
+# 캡처 결과물 전체를 무시한다. 제목별 하위 폴더까지 포함해야 하므로
+# result/*.jpg 같은 한 단계 패턴으로는 부족하다.
+result/*
+!result/.gitkeep
 .pytest_cache/
+.DS_Store
