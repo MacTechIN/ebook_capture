@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from ebook_capture import cli as cli_mod
@@ -141,3 +142,32 @@ def test_ask_index_retries_until_in_range(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     assert _ask_index("번호: ", 3) == 1
     assert "0 부터 2 사이" in capsys.readouterr().out
+
+
+def test_ask_float_aborts_cleanly_on_eof(monkeypatch):
+    """stdin이 터미널이 아니면 트레이스백 대신 한국어 안내로 끝나야 한다."""
+    def raise_eof(prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", raise_eof)
+    with pytest.raises(SystemExit):
+        _ask_float("간격: ")
+
+
+def test_choose_display_without_displays_exits(monkeypatch):
+    """디스플레이가 없으면 무한 반복 대신 즉시 중단해야 한다."""
+    monkeypatch.setattr(cli_mod, "list_displays", lambda: [])
+    with pytest.raises(SystemExit):
+        cli_mod._choose_display()
+
+
+def test_main_treats_eof_at_confirmation_as_decline(monkeypatch, tmp_path):
+    """자동 실행 환경에서 EOF가 '진행'으로 해석되면 멋대로 클릭을 시작한다."""
+    events = _install_fakes(monkeypatch, tmp_path)
+
+    def raise_eof(prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", raise_eof)
+    assert main(["--title", "책", "--interval", "0"]) == 1
+    assert "watcher_init" not in events

@@ -50,7 +50,10 @@ def save_previews(capturer, config: SessionConfig, out_dir: Path) -> list[Path]:
 def _ask(prompt: str) -> str:
     """빈 입력을 허용하지 않는 문자열 입력."""
     while True:
-        raw = input(prompt).strip()
+        try:
+            raw = input(prompt).strip()
+        except EOFError:
+            raise SystemExit("\n입력이 종료되어 중단합니다.")
         if raw:
             return raw
         print("  값을 입력하세요.")
@@ -86,6 +89,8 @@ def _ask_index(prompt: str, count: int) -> int:
 
 def _choose_display() -> Region:
     displays = list_displays()
+    if not displays:
+        raise SystemExit("연결된 디스플레이를 찾을 수 없습니다.")
     print("\n캡처할 디스플레이를 고르세요:")
     for i, d in enumerate(displays):
         print(f"  [{i}] ({d.left},{d.top}) {d.width}x{d.height}  스케일 {d.scale:.2f}x")
@@ -137,7 +142,11 @@ def main(argv: list[str] | None = None) -> int:
     with ScreenCapture() as capturer:
         for path in save_previews(capturer, config, RESULT_DIR):
             print(f"  미리보기 저장: {path}")
-        if input("\n미리보기가 올바릅니까? 계속하려면 y: ").strip().lower() != "y":
+        try:
+            answer = input("\n미리보기가 올바릅니까? 계속하려면 y: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer != "y":
             print("취소했습니다.")
             return 1
 
