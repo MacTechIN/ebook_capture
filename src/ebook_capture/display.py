@@ -1,5 +1,4 @@
 """디스플레이 정보 조회와 macOS 권한 프리플라이트."""
-import sys
 from dataclasses import dataclass
 
 import Quartz
