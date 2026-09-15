@@ -39,3 +39,9 @@ def test_sanitize_title_removes_path_separators():
 def test_sanitize_title_rejects_empty():
     with pytest.raises(ValueError):
         sanitize_title("   ")
+
+
+def test_sort_pages_drops_non_page_files_without_crashing():
+    """result/ 에는 .pdf 등이 섞여 있다. 걸러내기가 정렬보다 먼저여야 한다."""
+    paths = [Path("t_p10.jpg"), Path("t.pdf"), Path("t_p2.jpg"), Path("random.jpg")]
+    assert [p.name for p in sort_pages(paths)] == ["t_p2.jpg", "t_p10.jpg"]
