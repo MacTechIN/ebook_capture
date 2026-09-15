@@ -8,8 +8,8 @@ from .capture import ScreenCapture
 from .clicker import click
 from .display import list_displays, require_permissions
 from .geometry import Region
-from .naming import sanitize_title
-from .pdfbuild import build_pdf
+from .naming import latest_page_number, sanitize_title
+from .pdfbuild import build_pdf, collect_pages
 from .picker import AbortWatcher, pick_point, pick_region
 from .session import SessionConfig, run_session
 
@@ -139,6 +139,26 @@ def main(argv: list[str] | None = None) -> int:
     else:
         config = _configure(args)
 
+    existing = collect_pages(RESULT_DIR, config.title)
+    start_page = latest_page_number(existing)
+
+    if args.resume and start_page:
+        print(f"기존 {start_page}쪽을 찾았습니다. p{start_page + 1:03d} 부터 이어서 캡처합니다.")
+    elif existing:
+        print(f"\n경고: '{config.title}' 이름으로 이미 {len(existing)}쪽이 저장되어 있습니다.")
+        print("  이대로 진행하면 앞쪽부터 덮어써서 이전에 캡처한 것과 뒤섞입니다.")
+        print("  이어서 캡처하려면 --resume 을 사용하세요.")
+        try:
+            answer = input("  기존 파일을 지우고 처음부터 시작하려면 d, 취소하려면 다른 키: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer != "d":
+            print("취소했습니다.")
+            return 1
+        for path in existing:
+            path.unlink()
+        start_page = 0
+
     with ScreenCapture() as capturer:
         for path in save_previews(capturer, config, RESULT_DIR):
             print(f"  미리보기 저장: {path}")
@@ -162,12 +182,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  p{page:03d}  진행률 {shown}", flush=True)
 
         with AbortWatcher() as watcher:
-            pages, reason = run_session(
-                config, RESULT_DIR, capturer, lambda pt: click(*pt), watcher, on_page=report
+            last_page, reason = run_session(
+                config, RESULT_DIR, capturer, lambda pt: click(*pt), watcher,
+                on_page=report, start_page=start_page,
             )
 
-    print(f"\n캡처 종료: {pages}장 — {reason}")
-    if pages == 0:
+    captured = last_page - start_page
+    print(f"\n캡처 종료: 이번에 {captured}장, 총 {last_page}쪽 — {reason}")
+    if last_page == 0:
         print("캡처된 페이지가 없어 PDF를 만들지 않습니다.")
         return 1
 
@@ -178,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"캡처한 이미지는 {RESULT_DIR} 에 그대로 있습니다. 문제를 고친 뒤 다시 시도하세요.")
         return 1
     size_mb = pdf_path.stat().st_size / 1e6
-    print(f"PDF 생성 완료: {pdf_path}  ({pages}쪽, {size_mb:.1f} MB)")
+    print(f"PDF 생성 완료: {pdf_path}  ({last_page}쪽, {size_mb:.1f} MB)")
     return 0
 
 

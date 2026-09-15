@@ -132,3 +132,15 @@ def test_session_aborts_on_esc(tmp_path):
     # ESC는 이미 클릭한 뒤 다음 회차 시작에서 감지되므로 클릭 수가 쪽 수와 같다.
     # 다른 종료 사유(clicks == pages - 1)와 다른 이 차이가 정상 동작이다.
     assert len(clicks) == 2
+
+
+def test_session_continues_from_start_page(tmp_path):
+    """재개 시 기존 페이지를 덮어쓰지 않고 다음 번호부터 저장해야 한다."""
+    capturer = FakeCapturer(percents=["50%", "100%"])
+    last_page, reason = run_session(
+        _config(), tmp_path, capturer, lambda p: None, FakeWatcher(), start_page=7
+    )
+    assert reason == StopReason.COMPLETE
+    assert last_page == 9
+    names = sorted(p.name for p in tmp_path.glob("테스트책_p*.jpg"))
+    assert names == ["테스트책_p008.jpg", "테스트책_p009.jpg"]

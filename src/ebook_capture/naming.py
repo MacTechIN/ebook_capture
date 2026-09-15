@@ -24,6 +24,12 @@ def parse_page_number(name: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def latest_page_number(paths: list[Path]) -> int:
+    """이미 저장된 페이지 중 가장 큰 번호. 하나도 없으면 0."""
+    numbers = [n for p in paths if (n := parse_page_number(p.name)) is not None]
+    return max(numbers, default=0)
+
+
 def sort_pages(paths: list[Path]) -> list[Path]:
     """페이지 번호 수치순 정렬. 사전순 정렬은 p10 < p2 버그를 만든다.
 

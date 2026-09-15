@@ -82,10 +82,11 @@ def _install_fakes(monkeypatch, tmp_path, *, confirm="y", pages=3):
         def __exit__(self, *exc):
             events.append("watcher_exit")
 
-    def fake_run_session(config, out_dir, capturer, clicker_fn, watcher, on_page=None):
+    def fake_run_session(config, out_dir, capturer, clicker_fn, watcher, on_page=None, start_page=0):
         saved = (Path(out_dir) / f"{config.title}.session.json").exists()
         events.append(f"run_session(session_saved={saved})")
-        return pages, StopReason.COMPLETE
+        events.append(f"start_page={start_page}")
+        return start_page + pages, StopReason.COMPLETE
 
     def fake_build_pdf(out_dir, title, page_size=None):
         events.append("build_pdf")
@@ -171,3 +172,30 @@ def test_main_treats_eof_at_confirmation_as_decline(monkeypatch, tmp_path):
     monkeypatch.setattr("builtins.input", raise_eof)
     assert main(["--title", "책", "--interval", "0"]) == 1
     assert "watcher_init" not in events
+
+
+def test_main_resume_continues_after_existing_pages(monkeypatch, tmp_path):
+    """--resume 은 기존 페이지 다음 번호부터 이어가야 한다."""
+    for i in (1, 2, 3):
+        (tmp_path / f"책_p{i:03d}.jpg").write_bytes(b"x")
+    cfg = SessionConfig(
+        title="책",
+        capture_region=Region(0, 0, 40, 40),
+        progress_region=Region(0, 100, 30, 20),
+        click_point=(10, 10),
+        interval=0.0,
+    )
+    session_file = tmp_path / "책.session.json"
+    cfg.save(session_file)
+    events = _install_fakes(monkeypatch, tmp_path)
+    assert main(["--resume", str(session_file)]) == 0
+    assert "start_page=3" in events, f"start_page가 전달되지 않았다: {events}"
+
+
+def test_main_refuses_to_overwrite_existing_pages(monkeypatch, tmp_path):
+    """--resume 없이 같은 제목으로 재실행하면 덮어쓰기 전에 막아야 한다."""
+    (tmp_path / "책_p001.jpg").write_bytes(b"x")
+    events = _install_fakes(monkeypatch, tmp_path, confirm="n")
+    assert main(["--title", "책", "--interval", "0"]) == 1
+    assert "watcher_init" not in events
+    assert (tmp_path / "책_p001.jpg").exists(), "취소했는데 파일을 지우면 안 된다"

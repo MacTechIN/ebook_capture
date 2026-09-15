@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from ebook_capture.naming import page_filename, parse_page_number, sanitize_title, sort_pages
+from ebook_capture.naming import (
+    latest_page_number,
+    page_filename,
+    parse_page_number,
+    sanitize_title,
+    sort_pages,
+)
 
 
 def test_page_filename_zero_padded():
@@ -45,3 +51,12 @@ def test_sort_pages_drops_non_page_files_without_crashing():
     """result/ 에는 .pdf 등이 섞여 있다. 걸러내기가 정렬보다 먼저여야 한다."""
     paths = [Path("t_p10.jpg"), Path("t.pdf"), Path("t_p2.jpg"), Path("random.jpg")]
     assert [p.name for p in sort_pages(paths)] == ["t_p2.jpg", "t_p10.jpg"]
+
+
+def test_latest_page_number():
+    paths = [Path("t_p001.jpg"), Path("t_p010.jpg"), Path("t_p002.jpg"), Path("t.pdf")]
+    assert latest_page_number(paths) == 10
+
+
+def test_latest_page_number_empty():
+    assert latest_page_number([]) == 0

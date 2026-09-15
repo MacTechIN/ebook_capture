@@ -53,6 +53,7 @@ def run_session(
     clicker_fn: Callable[[tuple[int, int]], None],
     watcher,
     on_page: Callable[[int, float | None], None] | None = None,
+    start_page: int = 0,
 ) -> tuple[int, StopReason]:
     """캡처 -> 저장 -> 진행률 판정 -> 클릭 -> 대기를 반복한다.
 
@@ -61,9 +62,13 @@ def run_session(
       2. 화면이 N회 연속 동일            -> STILL   (OCR 실패 대비 폴백)
       3. max_pages 도달                  -> MAX_PAGES
     여기에 ESC 중단(ABORTED)이 더해진다.
+
+    start_page 는 이미 디스크에 저장되어 있는 페이지 수다. 캡처는
+    start_page + 1 번부터 이어진다. max_pages 는 항상 페이지 번호의
+    절대 상한이므로, 재개 시에도 그대로 적용된다.
     """
     stillness = StillnessDetector(required=config.stillness_required)
-    page = 0
+    page = start_page
 
     while True:
         if watcher.aborted:
