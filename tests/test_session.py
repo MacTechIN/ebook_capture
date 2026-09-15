@@ -46,7 +46,10 @@ class FakeCapturer:
         if self.pages is not None:
             shade = self.pages[min(self.calls - 1, len(self.pages) - 1)]
         else:
-            shade = self.calls * 7 % 256
+            # 단계를 53으로 둔다. 7로 두면 RGB->L 변환에서 휘도 차이가 정확히 2.0이
+            # 되어 StillnessDetector의 threshold 2.0에 걸려 "화면이 멈췄다"로
+            # 오판한다. 53이면 휘도 차이가 16 이상이라 확실히 구분된다.
+            shade = self.calls * 53 % 256
         return Image.new("RGB", (60, 60), (shade, 60, 90))
 
 
