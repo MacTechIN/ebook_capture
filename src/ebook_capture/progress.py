@@ -4,7 +4,7 @@ import re
 import pytesseract
 from PIL import Image, ImageChops, ImageStat
 
-_NUM_RE = re.compile(r"\d{1,3}(?:\.\d+)?")
+_PCT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
 _WHITELIST = "0123456789.%/"
 
 
@@ -18,12 +18,15 @@ def read_percent(img: Image.Image, upscale: int = 4) -> float | None:
 
     실제 뷰어의 11px 글리프도 ×4 업스케일이면 정확히 읽힌다 (research.md 6.2).
     이진화·대비 보정은 불필요한 것으로 검증되어 넣지 않는다.
+
+    '%' 기호를 반드시 요구한다. 숫자만 찾으면 OCR 영역에 쪽 번호가 섞였을 때
+    'p 100 / 350'에서 100을 읽어 350쪽짜리 책을 100쪽에서 조기 종료시킨다.
     """
     big = img.resize((img.width * upscale, img.height * upscale), Image.LANCZOS)
     for psm in (7, 8):
-        match = _NUM_RE.search(_ocr(big, psm))
+        match = _PCT_RE.search(_ocr(big, psm))
         if match:
-            value = float(match.group(0))
+            value = float(match.group(1))
             if 0.0 <= value <= 100.0:
                 return value
     return None

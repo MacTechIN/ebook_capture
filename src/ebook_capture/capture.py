@@ -12,7 +12,7 @@ class ScreenCapture:
     """mss 인스턴스를 재사용한다. 첫 grab은 약 79ms, 이후 약 12ms (research.md 2.2)."""
 
     def __init__(self) -> None:
-        self._sct = mss.mss()
+        self._sct = mss.MSS()
 
     def grab(self, region: Region) -> Image.Image:
         shot = self._sct.grab(region.to_mss())

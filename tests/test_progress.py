@@ -25,6 +25,13 @@ def test_read_percent_returns_none_on_blank():
 def test_read_percent_rejects_out_of_range():
     """오인식으로 999 같은 값이 나오면 None이어야 한다."""
     assert read_percent(_label("999")) is None
+    assert read_percent(_label("150%")) is None
+
+
+@pytest.mark.parametrize("text", ["3 / 128", "p 100 / 350"])
+def test_read_percent_ignores_page_counters(text):
+    """'%'가 없는 숫자는 진행률이 아니다. 쪽 번호를 100%로 오인하면 조기 종료한다."""
+    assert read_percent(_label(text)) is None
 
 
 def test_stillness_detector_fires_after_required_repeats():
