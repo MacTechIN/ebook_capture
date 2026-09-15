@@ -11,7 +11,7 @@ from .geometry import Region
 from .naming import sanitize_title
 from .pdfbuild import build_pdf
 from .picker import AbortWatcher, pick_point, pick_region
-from .session import SessionConfig, StopReason, run_session
+from .session import SessionConfig, run_session
 
 RESULT_DIR = Path(__file__).resolve().parents[2] / "result"
 
@@ -47,18 +47,59 @@ def save_previews(capturer, config: SessionConfig, out_dir: Path) -> list[Path]:
     return paths
 
 
+def _ask(prompt: str) -> str:
+    """빈 입력을 허용하지 않는 문자열 입력."""
+    while True:
+        raw = input(prompt).strip()
+        if raw:
+            return raw
+        print("  값을 입력하세요.")
+
+
+def _ask_float(prompt: str, minimum: float = 0.0) -> float:
+    """숫자가 나올 때까지 되묻는다. 잘못 입력했다고 처음부터 다시 하게 만들지 않는다."""
+    while True:
+        raw = _ask(prompt)
+        try:
+            value = float(raw)
+        except ValueError:
+            print("  숫자를 입력하세요. 예: 2 또는 2.5")
+            continue
+        if value < minimum:
+            print(f"  {minimum} 이상이어야 합니다.")
+            continue
+        return value
+
+
+def _ask_index(prompt: str, count: int) -> int:
+    """0 이상 count 미만의 번호가 나올 때까지 되묻는다."""
+    while True:
+        raw = _ask(prompt)
+        try:
+            index = int(raw)
+        except ValueError:
+            index = -1
+        if 0 <= index < count:
+            return index
+        print(f"  0 부터 {count - 1} 사이의 번호를 입력하세요.")
+
+
 def _choose_display() -> Region:
     displays = list_displays()
     print("\n캡처할 디스플레이를 고르세요:")
     for i, d in enumerate(displays):
         print(f"  [{i}] ({d.left},{d.top}) {d.width}x{d.height}  스케일 {d.scale:.2f}x")
-    index = int(input("번호: ").strip())
+    index = _ask_index("번호: ", len(displays))
     return Region.from_display(displays[index])
 
 
 def _configure(args) -> SessionConfig:
-    title = sanitize_title(args.title or input("PDF 제목: ").strip())
-    interval = args.interval if args.interval is not None else float(input("캡처 간격(초): ").strip())
+    raw_title = args.title if args.title is not None else _ask("PDF 제목: ")
+    try:
+        title = sanitize_title(raw_title)
+    except ValueError as exc:
+        raise SystemExit(f"제목이 올바르지 않습니다: {exc}")
+    interval = args.interval if args.interval is not None else _ask_float("캡처 간격(초): ")
 
     print("\n영역과 클릭 지점을 지정합니다. 안내가 나오면 해당 위치를 클릭하세요.")
     capture_region = _choose_display() if args.fullscreen else pick_region("캡처 영역")
@@ -83,7 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
     if args.resume:
-        config = SessionConfig.load(Path(args.resume))
+        try:
+            config = SessionConfig.load(Path(args.resume))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            print(f"세션 파일을 읽을 수 없습니다: {args.resume}")
+            print(f"  {exc}")
+            return 1
         print(f"세션을 재개합니다: {config.title}")
     else:
         config = _configure(args)
@@ -116,7 +162,12 @@ def main(argv: list[str] | None = None) -> int:
         print("캡처된 페이지가 없어 PDF를 만들지 않습니다.")
         return 1
 
-    pdf_path = build_pdf(RESULT_DIR, config.title, page_size=args.page_size)
+    try:
+        pdf_path = build_pdf(RESULT_DIR, config.title, page_size=args.page_size)
+    except (ValueError, OSError) as exc:
+        print(f"PDF 생성에 실패했습니다: {exc}")
+        print(f"캡처한 이미지는 {RESULT_DIR} 에 그대로 있습니다. 문제를 고친 뒤 다시 시도하세요.")
+        return 1
     size_mb = pdf_path.stat().st_size / 1e6
     print(f"PDF 생성 완료: {pdf_path}  ({pages}쪽, {size_mb:.1f} MB)")
     return 0
