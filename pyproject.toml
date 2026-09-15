@@ -1,0 +1,31 @@
+[project]
+name = "ebook-capture"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "mss>=10.2",
+    "pynput>=1.8",
+    "pyobjc-framework-Quartz>=12.2",
+    "Pillow>=12.3",
+    "pytesseract>=0.3.13",
+    "img2pdf>=0.6.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pikepdf>=10"]
+
+[project.scripts]
+ebook-capture = "ebook_capture.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ebook_capture"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = ["manual: 실제 화면 조작이 필요해 자동 실행에서 제외되는 테스트"]
+addopts = "-m 'not manual'"
