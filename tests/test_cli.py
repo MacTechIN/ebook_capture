@@ -94,7 +94,7 @@ def _install_fakes(monkeypatch, tmp_path, *, confirm="y", pages=3):
         path.write_bytes(b"%PDF-1.4\n")
         return path
 
-    answers = iter([confirm])
+    answers = iter(confirm if isinstance(confirm, list) else [confirm])
     monkeypatch.setattr(cli_mod, "RESULT_DIR", tmp_path)
     monkeypatch.setattr(cli_mod, "require_permissions", lambda: events.append("perms"))
     monkeypatch.setattr(cli_mod, "ScreenCapture", FakeCapturer)
@@ -199,3 +199,83 @@ def test_main_refuses_to_overwrite_existing_pages(monkeypatch, tmp_path):
     assert main(["--title", "책", "--interval", "0"]) == 1
     assert "watcher_init" not in events
     assert (tmp_path / "책_p001.jpg").exists(), "취소했는데 파일을 지우면 안 된다"
+
+
+def test_main_deletes_existing_pages_only_after_preview_confirmed(monkeypatch, tmp_path):
+    """d로 동의해도 미리보기 확인 전에는 지우지 않는다."""
+    old = tmp_path / "책_p001.jpg"
+    old.write_bytes(b"x")
+    keep_pdf = tmp_path / "책.pdf"
+    keep_pdf.write_bytes(b"%PDF-1.4\n")
+    events = _install_fakes(monkeypatch, tmp_path, confirm=["d", "n"])
+    assert main(["--title", "책", "--interval", "0"]) == 1
+    assert old.exists(), "미리보기에서 취소했는데 기존 페이지를 지우면 안 된다"
+
+
+def test_main_deletes_existing_pages_after_full_confirmation(monkeypatch, tmp_path):
+    """d + y 를 모두 거친 뒤에만 기존 페이지를 지우고 처음부터 시작한다."""
+    old = tmp_path / "책_p001.jpg"
+    old.write_bytes(b"x")
+    keep = tmp_path / "책.session.json"
+    keep.write_text("{}", encoding="utf-8")
+    events = _install_fakes(monkeypatch, tmp_path, confirm=["d", "y"])
+    assert main(["--title", "책", "--interval", "0"]) == 0
+    assert not old.exists(), "확인까지 마쳤으면 기존 페이지는 지워져야 한다"
+    assert keep.exists(), "페이지 이미지가 아닌 파일은 건드리면 안 된다"
+    assert "start_page=0" in events
+
+
+def test_main_esc_during_countdown_aborts_before_run_session(monkeypatch, tmp_path):
+    """카운트다운 중 ESC가 눌리면(watcher.aborted) 클릭 루프를 아예 시작하면 안 된다."""
+    events = _install_fakes(monkeypatch, tmp_path)
+
+    class AbortedWatcher:
+        aborted = True
+
+        def __init__(self):
+            events.append("watcher_init")
+
+        def __enter__(self):
+            events.append("watcher_enter")
+            return self
+
+        def __exit__(self, *exc):
+            events.append("watcher_exit")
+
+    monkeypatch.setattr(cli_mod, "AbortWatcher", AbortedWatcher)
+    assert main(["--title", "책", "--interval", "0"]) == 1
+    assert not any(e.startswith("run_session") for e in events), "ESC로 중단됐으면 run_session을 호출하면 안 된다"
+    assert "sleep(5)" in events, "카운트다운은 AbortWatcher 안에서 여전히 일어나야 한다"
+
+
+def test_main_reports_unexpected_exception_in_korean(monkeypatch, tmp_path, capsys):
+    """run_session에서 예기치 못한 예외가 나면 영어 트레이스백 대신 한국어 안내로 끝나야 한다."""
+    events = _install_fakes(monkeypatch, tmp_path)
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli_mod, "run_session", boom)
+    assert main(["--title", "책", "--interval", "0"]) == 1
+    out = capsys.readouterr().out
+    assert "disk full" not in out or "오류" in out
+    assert "--resume" in out
+
+
+def test_main_reports_actual_merged_page_count(monkeypatch, tmp_path, capsys):
+    """PDF 완료 메시지는 build_pdf가 실제로 병합한 장수를 보고해야 한다 (last_page가 아니라)."""
+    events = _install_fakes(monkeypatch, tmp_path, pages=3)
+
+    def fake_build_pdf(out_dir, title, page_size=None):
+        events.append("build_pdf")
+        # 실제로는 한 장이 손으로 지워진 상황을 흉내낸다: last_page(3)보다 적게 병합됨.
+        for i in (1, 2):
+            (Path(out_dir) / f"{title}_p{i:03d}.jpg").write_bytes(b"x")
+        path = Path(out_dir) / f"{title}.pdf"
+        path.write_bytes(b"%PDF-1.4\n")
+        return path
+
+    monkeypatch.setattr(cli_mod, "build_pdf", fake_build_pdf)
+    assert main(["--title", "책", "--interval", "0"]) == 0
+    out = capsys.readouterr().out
+    assert "2쪽" in out

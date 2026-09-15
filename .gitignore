@@ -4,4 +4,5 @@ __pycache__/
 result/*.jpg
 result/*.pdf
 result/*.session.json
+result/*.png
 .pytest_cache/

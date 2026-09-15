@@ -32,6 +32,17 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _is_single_color(image) -> bool:
+    """이미지 전체가 단색인지 확인한다.
+
+    CGPreflightScreenCaptureAccess()가 True를 반환해도 실제로는 권한이 아직
+    적용되지 않아 캡처가 단색(검은 화면 등)으로 나오는 경우가 있다. TCC
+    플래그만으로는 이 상황을 잡을 수 없다.
+    """
+    colors = image.getcolors(maxcolors=1)
+    return colors is not None and len(colors) == 1
+
+
 def save_previews(capturer, config: SessionConfig, out_dir: Path) -> list[Path]:
     """지정한 영역을 한 장씩 저장해 사용자가 눈으로 확인하게 한다.
 
@@ -41,9 +52,16 @@ def save_previews(capturer, config: SessionConfig, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for label, region in (("capture", config.capture_region), ("progress", config.progress_region)):
+        image = capturer.grab(region)
         path = out_dir / f"_preview_{label}.png"
-        capturer.grab(region).save(path)
+        image.save(path)
         paths.append(path)
+        if _is_single_color(image):
+            print(f"\n경고: '{label}' 미리보기가 완전한 단색 이미지입니다.")
+            print("  화면 기록 권한이 실제로는 아직 적용되지 않았을 가능성이 높습니다")
+            print("  (진짜로 빈 화면일 수도 있습니다 — 아래 미리보기를 직접 확인하세요).")
+            print("  권한이 의심되면 이 프로그램을 실행한 앱(터미널 등)을 완전히 종료했다가")
+            print("  다시 실행해 보세요.")
     return paths
 
 
@@ -136,11 +154,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {exc}")
             return 1
         print(f"세션을 재개합니다: {config.title}")
+        if any(d.scale != 1.0 for d in list_displays()):
+            print("경고: 현재 디스플레이 배율이 1.00x가 아닙니다.")
+            print("  세션 저장 당시와 화면 설정이 다르면 저장된 좌표가 지금 화면과 맞지 않을 수 있습니다.")
     else:
         config = _configure(args)
 
     existing = collect_pages(RESULT_DIR, config.title)
     start_page = latest_page_number(existing)
+    pending_delete: list[Path] = []
 
     if args.resume and start_page:
         print(f"기존 {start_page}쪽을 찾았습니다. p{start_page + 1:03d} 부터 이어서 캡처합니다.")
@@ -155,9 +177,8 @@ def main(argv: list[str] | None = None) -> int:
         if answer != "d":
             print("취소했습니다.")
             return 1
-        for path in existing:
-            path.unlink()
-        start_page = 0
+        # 미리보기 확인 전까지는 지우지 않는다 (I3). 여기서는 '동의'만 기록한다.
+        pending_delete = existing
 
     with ScreenCapture() as capturer:
         for path in save_previews(capturer, config, RESULT_DIR):
@@ -170,22 +191,39 @@ def main(argv: list[str] | None = None) -> int:
             print("취소했습니다.")
             return 1
 
+        # 미리보기 확인이 끝났으니 이제 실제로 기존 페이지를 지운다.
+        if pending_delete:
+            for path in pending_delete:
+                path.unlink()
+            start_page = 0
+
         session_path = RESULT_DIR / f"{config.title}.session.json"
         config.save(session_path)
         print(f"세션 설정 저장: {session_path}")
-
-        print("\n5초 후 시작합니다. 대상 창을 맨 앞으로 띄워두세요. 중단하려면 ESC.")
-        time.sleep(5)
 
         def report(page: int, percent: float | None) -> None:
             shown = f"{percent:.0f}%" if percent is not None else "판독 실패"
             print(f"  p{page:03d}  진행률 {shown}", flush=True)
 
         with AbortWatcher() as watcher:
-            last_page, reason = run_session(
-                config, RESULT_DIR, capturer, lambda pt: click(*pt), watcher,
-                on_page=report, start_page=start_page,
-            )
+            print("\n5초 후 시작합니다. 대상 창을 맨 앞으로 띄워두세요. 중단하려면 ESC.")
+            time.sleep(5)
+            if watcher.aborted:
+                print("취소했습니다.")
+                return 1
+            try:
+                last_page, reason = run_session(
+                    config, RESULT_DIR, capturer, lambda pt: click(*pt), watcher,
+                    on_page=report, start_page=start_page,
+                )
+            except KeyboardInterrupt:
+                print("\n사용자가 강제로 중단했습니다 (Ctrl+C).")
+                print(f"  캡처한 이미지와 세션 설정은 {RESULT_DIR} 에 그대로 있습니다. --resume 으로 이어서 계속할 수 있습니다.")
+                return 1
+            except Exception as exc:  # noqa: BLE001 - 예상 못 한 오류도 한국어로 안내해야 한다
+                print(f"\n캡처 중 예상치 못한 오류가 발생했습니다: {exc}")
+                print(f"  캡처한 이미지와 세션 설정은 {RESULT_DIR} 에 그대로 있습니다. --resume 으로 이어서 계속할 수 있습니다.")
+                return 1
 
     captured = last_page - start_page
     print(f"\n캡처 종료: 이번에 {captured}장, 총 {last_page}쪽 — {reason}")
@@ -199,8 +237,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PDF 생성에 실패했습니다: {exc}")
         print(f"캡처한 이미지는 {RESULT_DIR} 에 그대로 있습니다. 문제를 고친 뒤 다시 시도하세요.")
         return 1
+    merged_pages = len(collect_pages(RESULT_DIR, config.title))
     size_mb = pdf_path.stat().st_size / 1e6
-    print(f"PDF 생성 완료: {pdf_path}  ({last_page}쪽, {size_mb:.1f} MB)")
+    print(f"PDF 생성 완료: {pdf_path}  ({merged_pages}쪽, {size_mb:.1f} MB)")
     return 0
 
 

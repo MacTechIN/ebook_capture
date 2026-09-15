@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 _PAGE_RE = re.compile(r"_p(\d+)\.jpg$", re.IGNORECASE)
-_UNSAFE_RE = re.compile(r'[/\\:*?"<>|]')
+_UNSAFE_RE = re.compile(r'[/\\:*?"<>|\[\]]')
 
 
 def sanitize_title(title: str) -> str:

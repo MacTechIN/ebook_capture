@@ -60,3 +60,9 @@ def test_latest_page_number():
 
 def test_latest_page_number_empty():
     assert latest_page_number([]) == 0
+
+
+def test_sanitize_title_removes_glob_characters():
+    """대괄호는 glob 문자 클래스라 파일 검색을 깨뜨린다."""
+    cleaned = sanitize_title("책[개정판]")
+    assert "[" not in cleaned and "]" not in cleaned

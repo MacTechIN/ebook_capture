@@ -68,3 +68,16 @@ def test_build_pdf_a4_layout(tmp_path):
 def test_build_pdf_with_no_pages_raises(tmp_path):
     with pytest.raises(ValueError, match="이미지"):
         build_pdf(tmp_path, "없는책")
+
+
+def test_collect_pages_with_brackets_in_title(tmp_path):
+    """glob에서 []는 문자 클래스다. 이스케이프하지 않으면 한 장도 못 찾는다."""
+    _make_pages(tmp_path, "책[개정판]", 3)
+    assert len(collect_pages(tmp_path, "책[개정판]")) == 3
+
+
+def test_build_pdf_with_brackets_in_title(tmp_path):
+    _make_pages(tmp_path, "책[개정판]", 2)
+    pdf = build_pdf(tmp_path, "책[개정판]")
+    with pikepdf.open(pdf) as doc:
+        assert len(doc.pages) == 2
