@@ -453,6 +453,12 @@ def test_sort_pages_is_numeric_not_lexical():
     assert [p.name for p in sort_pages(paths)] == ["t_p1.jpg", "t_p2.jpg", "t_p10.jpg"]
 
 
+def test_sort_pages_drops_non_page_files_without_crashing():
+    """result/ 에는 .pdf 등이 섞여 있다. 걸러내기가 정렬보다 먼저여야 한다."""
+    paths = [Path("t_p10.jpg"), Path("t.pdf"), Path("t_p2.jpg"), Path("random.jpg")]
+    assert [p.name for p in sort_pages(paths)] == ["t_p2.jpg", "t_p10.jpg"]
+
+
 def test_sanitize_title_removes_path_separators():
     assert "/" not in sanitize_title("a/b")
     assert ":" not in sanitize_title("a:b")
@@ -483,7 +489,7 @@ _UNSAFE_RE = re.compile(r'[/\\:*?"<>|]')
 
 
 def sanitize_title(title: str) -> str:
-    """파일명에 쓸 수 없는 문자를 제거한다."""
+    """파일명에 쓸 수 없는 문자를 밑줄로 바꾼다."""
     cleaned = _UNSAFE_RE.sub("_", title).strip()
     if not cleaned:
         raise ValueError("제목이 비어 있습니다.")
@@ -501,9 +507,13 @@ def parse_page_number(name: str) -> int | None:
 
 
 def sort_pages(paths: list[Path]) -> list[Path]:
-    """페이지 번호 수치순 정렬. 사전순 정렬은 p10 < p2 버그를 만든다."""
-    numbered = [(parse_page_number(p.name), p) for p in paths]
-    return [p for n, p in sorted(numbered, key=lambda t: t[0]) if n is not None]
+    """페이지 번호 수치순 정렬. 사전순 정렬은 p10 < p2 버그를 만든다.
+
+    페이지가 아닌 파일은 정렬 '전에' 걸러낸다. 정렬 후에 거르면 None과 int를
+    비교하다 TypeError가 난다. result/ 에는 .pdf 등이 함께 있으므로 실제로 발생한다.
+    """
+    numbered = [(n, p) for p in paths if (n := parse_page_number(p.name)) is not None]
+    return [p for _, p in sorted(numbered, key=lambda t: t[0])]
 ```
 
 - [ ] **Step 4: 테스트 통과 확인**
