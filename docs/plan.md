@@ -625,7 +625,7 @@ class ScreenCapture:
     """mss 인스턴스를 재사용한다. 첫 grab은 약 79ms, 이후 약 12ms (research.md 2.2)."""
 
     def __init__(self) -> None:
-        self._sct = mss.mss()
+        self._sct = mss.MSS()
 
     def grab(self, region: Region) -> Image.Image:
         shot = self._sct.grab(region.to_mss())
@@ -872,6 +872,13 @@ def test_read_percent_returns_none_on_blank():
 def test_read_percent_rejects_out_of_range():
     """오인식으로 999 같은 값이 나오면 None이어야 한다."""
     assert read_percent(_label("999")) is None
+    assert read_percent(_label("150%")) is None
+
+
+@pytest.mark.parametrize("text", ["3 / 128", "p 100 / 350"])
+def test_read_percent_ignores_page_counters(text):
+    """'%'가 없는 숫자는 진행률이 아니다. 쪽 번호를 100%로 오인하면 조기 종료한다."""
+    assert read_percent(_label(text)) is None
 
 
 def test_stillness_detector_fires_after_required_repeats():
@@ -920,7 +927,7 @@ import re
 import pytesseract
 from PIL import Image, ImageChops, ImageStat
 
-_NUM_RE = re.compile(r"\d{1,3}(?:\.\d+)?")
+_PCT_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
 _WHITELIST = "0123456789.%/"
 
 
@@ -934,12 +941,15 @@ def read_percent(img: Image.Image, upscale: int = 4) -> float | None:
 
     실제 뷰어의 11px 글리프도 ×4 업스케일이면 정확히 읽힌다 (research.md 6.2).
     이진화·대비 보정은 불필요한 것으로 검증되어 넣지 않는다.
+
+    '%' 기호를 반드시 요구한다. 숫자만 찾으면 OCR 영역에 쪽 번호가 섞였을 때
+    'p 100 / 350'에서 100을 읽어 350쪽짜리 책을 100쪽에서 조기 종료시킨다.
     """
     big = img.resize((img.width * upscale, img.height * upscale), Image.LANCZOS)
     for psm in (7, 8):
-        match = _NUM_RE.search(_ocr(big, psm))
+        match = _PCT_RE.search(_ocr(big, psm))
         if match:
-            value = float(match.group(0))
+            value = float(match.group(1))
             if 0.0 <= value <= 100.0:
                 return value
     return None
