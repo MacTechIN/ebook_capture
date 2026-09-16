@@ -11,6 +11,7 @@ from .geometry import Region
 from .naming import latest_page_number, sanitize_title
 from .pdfbuild import build_pdf, collect_pages
 from .picker import AbortWatcher, pick_point, pick_region
+from .progress import load_loading_references, wait_for_loading
 from .session import SessionConfig, run_session
 
 # 실행 위치 기준의 상대 경로다. 소스 위치를 기준으로 삼으면 전역 설치했을 때
@@ -33,6 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resume", metavar="제목|경로", help="저장된 세션으로 재개 (제목만 줘도 됩니다)")
     p.add_argument("--out", metavar="폴더", default=None,
                    help="결과를 저장할 폴더 (기본: 현재 폴더의 result)")
+    p.add_argument("--loading-image", metavar="이미지", action="append", default=[],
+                   help="로딩 표시 그림 (여러 번 줄 수 있습니다)")
+    p.add_argument("--loading-region", action="store_true",
+                   help="로딩 표시가 뜨는 영역을 클릭으로 지정합니다")
+    p.add_argument("--record-loading", action="store_true",
+                   help="로딩 표시를 직접 촬영해 등록합니다 (여러 장)")
+    p.add_argument("--load-timeout", type=float, default=30.0, metavar="초",
+                   help="로딩을 기다리는 최대 시간 (기본 30)")
     return p
 
 
@@ -129,6 +138,28 @@ def _resolve_session_path(value: str, root: Path | None = None) -> Path:
     return direct
 
 
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
+
+
+def _loading_reference_paths(result_root: Path, explicit: list[str]) -> list[Path]:
+    """등록된 로딩 표시 그림을 모은다.
+
+    --loading-image 로 직접 준 것과, 결과 폴더 아래 loading/ 에 넣어둔 것을 합친다.
+    앱마다 로딩 표시가 다르므로 여러 장을 등록할 수 있다.
+    """
+    paths = [Path(value) for value in explicit]
+    folder = Path(result_root) / "loading"
+    if folder.is_dir():
+        paths += [p for p in sorted(folder.iterdir())
+                  if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES]
+    seen, unique = set(), []
+    for path in paths:
+        if path not in seen:
+            seen.add(path)
+            unique.append(path)
+    return unique
+
+
 def _choose_display() -> Region:
     displays = list_displays()
     if not displays:
@@ -153,6 +184,10 @@ def _configure(args) -> SessionConfig:
     click_point = pick_point("다음 페이지로 넘기는 버튼")
     progress_region = pick_region("진행률(%) 표시 영역")
 
+    loading_region = None
+    if args.loading_region:
+        loading_region = pick_region("로딩 표시 영역")
+
     return SessionConfig(
         title=title,
         capture_region=capture_region,
@@ -162,7 +197,61 @@ def _configure(args) -> SessionConfig:
         dpi=args.dpi,
         quality=args.quality,
         max_pages=args.max_pages,
+        loading_region=loading_region,
+        load_timeout=args.load_timeout,
     )
+
+
+_RECORD_SECONDS = 3.0
+_RECORD_POLL = 0.15
+_RECORD_MAX_FRAMES = 8
+_RECORD_MIN_DIFF = 6.0
+
+
+def _record_loading(result_root: Path) -> int:
+    """다음 페이지를 직접 눌러 로딩 표시를 여러 장 찍어 등록한다.
+
+    로딩 표시는 도는 그림이라 한 장만으로는 각도가 다를 때 못 알아본다.
+    서로 다른 프레임만 골라 저장한다.
+    """
+    print("로딩 표시를 등록합니다. 먼저 영역과 버튼을 지정하세요.")
+    region = pick_region("로딩 표시 영역")
+    point = pick_point("다음 페이지로 넘기는 버튼")
+
+    folder = result_root / "loading"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n3초 후 다음 페이지를 누르고 {_RECORD_SECONDS:.0f}초 동안 촬영합니다. 손대지 마세요.")
+    time.sleep(3)
+
+    kept: list = []
+    with ScreenCapture() as capturer:
+        click(*point)
+        deadline = time.monotonic() + _RECORD_SECONDS
+        while time.monotonic() < deadline and len(kept) < _RECORD_MAX_FRAMES:
+            frame = capturer.grab(region)
+            if all(_frame_difference(frame, seen) > _RECORD_MIN_DIFF for seen in kept):
+                kept.append(frame)
+            time.sleep(_RECORD_POLL)
+
+    if not kept:
+        print("촬영된 화면이 없습니다.")
+        return 1
+    for i, frame in enumerate(kept, 1):
+        path = folder / f"loading_{i:02d}.png"
+        frame.save(path)
+        print(f"  저장: {path}")
+    print(f"\n{len(kept)}장을 등록했습니다. 다음 실행부터 자동으로 사용됩니다.")
+    return 0
+
+
+def _frame_difference(a, b) -> float:
+    from PIL import ImageChops, ImageStat
+
+    small_a = a.convert("RGB").resize((64, 64))
+    small_b = b.convert("RGB").resize((64, 64))
+    channels = ImageStat.Stat(ImageChops.difference(small_a, small_b)).mean
+    return sum(channels) / len(channels)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
     require_permissions()
     result_root = Path(args.out).expanduser() if args.out else RESULT_DIR
     result_root.mkdir(parents=True, exist_ok=True)
+
+    if args.record_loading:
+        return _record_loading(result_root)
 
     if args.resume:
         session_path = _resolve_session_path(args.resume, result_root)
@@ -191,6 +283,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # 제목마다 별도 폴더를 둔다. 여러 권을 캡처해도 result/ 가 섞이지 않는다.
     project_dir.mkdir(parents=True, exist_ok=True)
+
+    reference_paths = _loading_reference_paths(result_root, args.loading_image)
+    loading_references = load_loading_references(reference_paths) if reference_paths else None
+    if config.loading_region is not None:
+        registered = f"등록된 로딩 그림 {len(reference_paths)}장" if reference_paths else "등록된 로딩 그림 없음 (변화 감지로만 판단)"
+        print(f"로딩 대기 사용: {registered}, 최대 {config.load_timeout:.0f}초")
 
     existing = collect_pages(project_dir, config.title)
     start_page = latest_page_number(existing)
@@ -246,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 last_page, reason = run_session(
                     config, project_dir, capturer, lambda pt: click(*pt), watcher,
+                    loading_references=loading_references,
                     on_page=report, start_page=start_page,
                 )
             except KeyboardInterrupt:

@@ -1,7 +1,12 @@
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
-from ebook_capture.progress import StillnessDetector, read_percent
+from ebook_capture.progress import (
+    StillnessDetector,
+    load_loading_references,
+    read_percent,
+    wait_for_loading,
+)
 
 FONT = "/System/Library/Fonts/Helvetica.ttc"
 
@@ -88,3 +93,130 @@ def test_stillness_detector_tolerates_tiny_noise():
     d.update(a)
     d.update(b)
     assert d.update(a) is True
+
+
+class _ScriptedCapturer:
+    """지정한 순서대로 이미지를 돌려주는 가짜 캡처기. 마지막 이미지는 계속 반복한다."""
+
+    def __init__(self, images):
+        self.images = list(images)
+        self.calls = 0
+
+    def grab(self, region):
+        img = self.images[min(self.calls, len(self.images) - 1)]
+        self.calls += 1
+        return img
+
+
+def _solid(shade):
+    return Image.new("RGB", (40, 40), (shade, shade, shade))
+
+
+def test_wait_for_loading_returns_immediately_when_nothing_animates():
+    """로딩 표시가 없으면 기다리지 않고 바로 진행해야 한다."""
+    cap = _ScriptedCapturer([_solid(200)])
+    waited = wait_for_loading(cap, None, poll=0.0, timeout=5.0)
+    assert waited == 0.0 or waited < 0.5
+    assert cap.calls <= 3, "정지 상태인데 여러 번 들여다볼 이유가 없다"
+
+
+def test_wait_for_loading_waits_while_the_region_keeps_changing():
+    """도는 표시가 있는 동안은 기다리고, 멈추면 진행해야 한다."""
+    spinning = [_solid(s) for s in (10, 60, 110, 160)]
+    settled = [_solid(200), _solid(200), _solid(200)]
+    cap = _ScriptedCapturer(spinning + settled)
+    wait_for_loading(cap, None, poll=0.0, timeout=5.0)
+    assert cap.calls >= len(spinning), "애니메이션이 끝나기 전에 진행하면 안 된다"
+
+
+def test_wait_for_loading_gives_up_after_the_timeout():
+    """영영 안 멈추면 무한 대기하지 말고 포기하고 진행한다."""
+    forever = _ScriptedCapturer([_solid(s) for s in range(0, 250, 40)])
+    waited = wait_for_loading(forever, None, poll=0.0, timeout=0.3)
+    assert waited <= 1.0
+
+
+def test_wait_for_loading_stops_when_the_user_aborts():
+    """대기 중에도 ESC가 먹혀야 한다. 로딩이 길면 여기서 갇힐 수 있다."""
+
+    class Watcher:
+        aborted = True
+
+    cap = _ScriptedCapturer([_solid(s) for s in range(0, 250, 40)])
+    wait_for_loading(cap, None, poll=0.0, timeout=10.0, watcher=Watcher())
+    assert cap.calls <= 3, "중단을 눌렀는데 계속 들여다보면 안 된다"
+
+
+def _ring(shade, size=(40, 40)):
+    """로딩 표시를 흉내낸 그림. 회전 각도가 다른 프레임을 만들 때 shade 를 바꾼다."""
+    img = Image.new("RGB", size, "white")
+    ImageDraw.Draw(img).ellipse((6, 6, size[0] - 6, size[1] - 6), outline=(shade, shade, shade), width=4)
+    return img
+
+
+def test_load_loading_references_reads_every_registered_image(tmp_path):
+    """앱마다 로딩 표시가 달라 여러 장을 등록할 수 있어야 한다."""
+    for i in range(3):
+        _ring(40 + i * 30).save(tmp_path / f"loading{i}.png")
+    refs = load_loading_references(sorted(tmp_path.glob("*.png")))
+    assert len(refs) == 3
+
+
+def test_wait_for_loading_waits_while_a_registered_image_matches(tmp_path):
+    """등록한 로딩 그림과 같으면, 화면이 멈춰 있어도 로딩 중으로 보고 기다린다."""
+    ref_path = tmp_path / "spin.png"
+    _ring(60).save(ref_path)
+    refs = load_loading_references([ref_path])
+
+    loading_frames = [_ring(60)] * 4          # 멈춘 로딩 표시
+    page = Image.new("RGB", (40, 40), (230, 230, 230))
+    cap = _ScriptedCapturer(loading_frames + [page, page, page])
+    wait_for_loading(cap, None, references=refs, poll=0.0, timeout=5.0)
+    assert cap.calls > len(loading_frames), "등록된 로딩 그림이 보이는 동안은 기다려야 한다"
+
+
+def test_wait_for_loading_proceeds_when_no_registered_image_matches(tmp_path):
+    """등록한 그림과 다르면 로딩이 아니므로 바로 진행한다."""
+    ref_path = tmp_path / "spin.png"
+    _ring(60).save(ref_path)
+    refs = load_loading_references([ref_path])
+
+    page = Image.new("RGB", (40, 40), (230, 230, 230))
+    cap = _ScriptedCapturer([page])
+    wait_for_loading(cap, None, references=refs, poll=0.0, timeout=5.0)
+    assert cap.calls <= 3
+
+
+def _spinner(angle, size=(120, 120)):
+    """실제 로딩 표시를 흉내낸 그림. 회색 링 위에서 청록색 호가 돈다."""
+    img = Image.new("RGB", size, "white")
+    draw = ImageDraw.Draw(img)
+    box = (14, 14, size[0] - 14, size[1] - 14)
+    draw.arc(box, 0, 360, fill=(224, 224, 224), width=8)
+    draw.arc(box, angle, angle + 80, fill=(34, 188, 212), width=8)
+    return img
+
+
+def test_wait_for_loading_catches_a_thin_spinner_rotating():
+    """얇은 표시가 도는 것도 잡아야 한다.
+
+    영역 전체 평균으로 재면 넓은 흰 배경이 차이를 희석해 15도 회전이 평균차이
+    1.00 에 그친다. 그대로 두면 로딩 중인데 진행해 로딩 화면을 저장하게 된다.
+    """
+    spinning = [_spinner(a) for a in range(0, 360, 15)]
+    settled = [Image.new("RGB", (120, 120), (250, 250, 250))] * 3
+    cap = _ScriptedCapturer(spinning + settled)
+    wait_for_loading(cap, None, poll=0.0, timeout=5.0)
+    assert cap.calls > len(spinning), "도는 표시를 정지로 오인하면 안 된다"
+
+
+def test_registered_image_does_not_match_a_blank_screen(tmp_path):
+    """로딩 표시는 대부분이 흰 배경이다. 빈 흰 화면까지 로딩으로 보면
+    매 페이지마다 타임아웃만큼 헛기다린다."""
+    path = tmp_path / "spin.png"
+    _spinner(0).save(path)
+    refs = load_loading_references([path])
+    blank = Image.new("RGB", (120, 120), "white")
+    cap = _ScriptedCapturer([blank])
+    wait_for_loading(cap, None, references=refs, poll=0.0, timeout=5.0)
+    assert cap.calls <= 3

@@ -82,7 +82,8 @@ def _install_fakes(monkeypatch, tmp_path, *, confirm="y", pages=3):
         def __exit__(self, *exc):
             events.append("watcher_exit")
 
-    def fake_run_session(config, out_dir, capturer, clicker_fn, watcher, on_page=None, start_page=0):
+    def fake_run_session(config, out_dir, capturer, clicker_fn, watcher, on_page=None,
+                         start_page=0, loading_references=None):
         saved = (Path(out_dir) / f"{config.title}.session.json").exists()
         events.append(f"run_session(session_saved={saved})")
         events.append(f"start_page={start_page}")
@@ -360,3 +361,39 @@ def test_main_writes_into_the_out_directory(monkeypatch, tmp_path):
     assert main(["--title", "책", "--interval", "0", "--out", str(custom)]) == 0
     assert (custom / "책" / "책.session.json").exists()
     assert not (tmp_path / "책").exists(), "--out 을 줬는데 기본 위치에 쓰면 안 된다"
+
+
+def test_parser_has_loading_options():
+    args = build_parser().parse_args([])
+    assert args.loading_image == []
+    assert args.record_loading is False
+    assert args.load_timeout == 30.0
+    args = build_parser().parse_args(
+        ["--loading-image", "a.png", "--loading-image", "b.png", "--record-loading",
+         "--load-timeout", "5"]
+    )
+    assert args.loading_image == ["a.png", "b.png"]
+    assert args.record_loading is True
+    assert args.load_timeout == 5.0
+
+
+def test_loading_reference_paths_combines_flag_and_folder(tmp_path):
+    """--loading-image 로 준 것과 loading/ 폴더에 있는 것을 모두 모아야 한다."""
+    folder = tmp_path / "loading"
+    folder.mkdir()
+    (folder / "spin1.png").write_bytes(b"x")
+    (folder / "spin2.jpg").write_bytes(b"x")
+    (folder / "메모.txt").write_bytes(b"x")
+    explicit = tmp_path / "따로.png"
+    explicit.write_bytes(b"x")
+
+    found = cli_mod._loading_reference_paths(tmp_path, [str(explicit)])
+    names = sorted(p.name for p in found)
+    assert names == ["spin1.png", "spin2.jpg", "따로.png"] or set(names) == {
+        "spin1.png", "spin2.jpg", "따로.png"
+    }
+    assert "메모.txt" not in names, "이미지가 아닌 파일은 제외해야 한다"
+
+
+def test_loading_reference_paths_is_empty_when_nothing_registered(tmp_path):
+    assert cli_mod._loading_reference_paths(tmp_path, []) == []

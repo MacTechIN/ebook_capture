@@ -154,3 +154,67 @@ def test_session_stops_when_page_fraction_reaches_total(tmp_path):
     )
     assert reason == StopReason.COMPLETE
     assert last_page == 3
+
+
+def test_config_roundtrip_without_a_loading_region(tmp_path):
+    """로딩 영역을 지정하지 않아도 저장·복원이 되어야 한다."""
+    cfg = _config()
+    assert cfg.loading_region is None
+    path = tmp_path / "s.json"
+    cfg.save(path)
+    assert SessionConfig.load(path) == cfg
+
+
+def test_config_roundtrip_with_a_loading_region(tmp_path):
+    cfg = _config(loading_region=Region(-3800, 500, 60, 60))
+    path = tmp_path / "s.json"
+    cfg.save(path)
+    restored = SessionConfig.load(path)
+    assert restored == cfg
+    assert restored.loading_region == Region(-3800, 500, 60, 60)
+
+
+def test_session_checks_loading_after_click_and_before_next_capture(tmp_path):
+    """다음 페이지를 누른 뒤 로딩이 끝날 때까지 캡처하지 않아야 한다."""
+    events = []
+
+    class Capturer:
+        def __init__(self):
+            self.n = 0
+
+        def grab(self, region):
+            if region.height == 34:
+                events.append("progress")
+                return _pct_image("50%")
+            if region.height == 20:
+                events.append("loading")
+                return Image.new("RGB", (20, 20), "white")
+            self.n += 1
+            events.append("capture")
+            return Image.new("RGB", (60, 60), (self.n * 53 % 256, 60, 90))
+
+    cfg = _config(loading_region=Region(0, 500, 20, 20), max_pages=2)
+    run_session(cfg, tmp_path, Capturer(), lambda pt: events.append("click"), FakeWatcher())
+
+    first_click = events.index("click")
+    assert events[first_click + 1] == "loading", f"클릭 직후 로딩을 확인해야 한다: {events}"
+    assert "capture" in events[first_click + 1 :], "로딩 확인 뒤 캡처가 이어져야 한다"
+
+
+def test_session_without_a_loading_region_never_checks_loading(tmp_path):
+    """로딩 영역을 지정하지 않았으면 기존 동작 그대로여야 한다."""
+    heights = []
+
+    class Capturer:
+        def __init__(self):
+            self.n = 0
+
+        def grab(self, region):
+            heights.append(region.height)
+            if region.height == 34:
+                return _pct_image("100%")
+            self.n += 1
+            return Image.new("RGB", (60, 60), (self.n * 53 % 256, 60, 90))
+
+    run_session(_config(), tmp_path, Capturer(), lambda pt: None, FakeWatcher())
+    assert set(heights) == {60, 34}

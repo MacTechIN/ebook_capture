@@ -58,3 +58,7 @@ class AbortWatcher:
     def __exit__(self, *exc) -> None:
         if self._listener is not None:
             self._listener.stop()
+            # 스레드가 완전히 끝날 때까지 기다린다. 기다리지 않으면 다음 리스너가
+            # 시작될 때 두 스레드가 동시에 macOS 키보드 훅에 들어가 프로세스가
+            # SIGABRT 로 죽는다.
+            self._listener.join(timeout=2.0)

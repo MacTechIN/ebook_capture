@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .capture import save_page
 from .geometry import Region
-from .progress import StillnessDetector, read_percent
+from .progress import StillnessDetector, read_percent, wait_for_loading
 
 
 class StopReason(StrEnum):
@@ -25,6 +25,9 @@ class SessionConfig:
     progress_region: Region
     click_point: tuple[int, int]
     interval: float
+    # 페이지를 넘긴 뒤 로딩 표시가 뜨는 영역. 지정하지 않으면 로딩을 확인하지 않는다.
+    loading_region: Region | None = None
+    load_timeout: float = 30.0
     dpi: int = 300
     quality: int = 95
     max_pages: int = 2000
@@ -43,6 +46,8 @@ class SessionConfig:
         data["capture_region"] = Region(**data["capture_region"])
         data["progress_region"] = Region(**data["progress_region"])
         data["click_point"] = tuple(data["click_point"])
+        if data.get("loading_region") is not None:
+            data["loading_region"] = Region(**data["loading_region"])
         return cls(**data)
 
 
@@ -54,6 +59,7 @@ def run_session(
     watcher,
     on_page: Callable[[int, float | None], None] | None = None,
     start_page: int = 0,
+    loading_references=None,
 ) -> tuple[int, StopReason]:
     """캡처 -> 저장 -> 진행률 판정 -> 클릭 -> 대기를 반복한다.
 
@@ -92,3 +98,13 @@ def run_session(
         clicker_fn(config.click_point)
         if config.interval > 0:
             time.sleep(config.interval)
+
+        # 느리게 뜨는 페이지가 있다. 로딩이 끝나기 전에 찍으면 로딩 화면이 저장된다.
+        if config.loading_region is not None:
+            wait_for_loading(
+                capturer,
+                config.loading_region,
+                references=loading_references,
+                timeout=config.load_timeout,
+                watcher=watcher,
+            )
