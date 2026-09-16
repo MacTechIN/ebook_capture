@@ -144,3 +144,13 @@ def test_session_continues_from_start_page(tmp_path):
     assert last_page == 9
     names = sorted(p.name for p in tmp_path.glob("테스트책_p*.jpg"))
     assert names == ["테스트책_p008.jpg", "테스트책_p009.jpg"]
+
+
+def test_session_stops_when_page_fraction_reaches_total(tmp_path):
+    """'1/762' 형식 뷰어에서도 n/n 에 도달하면 정상 종료해야 한다."""
+    capturer = FakeCapturer(percents=["1/3", "2/3", "3/3"])
+    last_page, reason = run_session(
+        _config(), tmp_path, capturer, lambda p: None, FakeWatcher()
+    )
+    assert reason == StopReason.COMPLETE
+    assert last_page == 3

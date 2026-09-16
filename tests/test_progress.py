@@ -28,9 +28,36 @@ def test_read_percent_rejects_out_of_range():
     assert read_percent(_label("150%")) is None
 
 
-@pytest.mark.parametrize("text", ["3 / 128", "p 100 / 350"])
-def test_read_percent_ignores_page_counters(text):
-    """'%'가 없는 숫자는 진행률이 아니다. 쪽 번호를 100%로 오인하면 조기 종료한다."""
+def test_read_percent_ignores_bare_numbers_without_a_marker():
+    """'%'도 '/'도 없는 숫자는 진행률이 아니다."""
+    assert read_percent(_label("350")) is None
+    assert read_percent(_label("128")) is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("1/762", 0.13), ("381/762", 50.0), ("762/762", 100.0), ("1 / 762", 0.13)],
+)
+def test_read_percent_understands_page_fractions(text, expected):
+    """'1/762' 처럼 쪽/전체로 표시하는 뷰어도 진행률로 읽어야 한다."""
+    value = read_percent(_label(text))
+    assert value is not None
+    assert abs(value - expected) < 0.1
+
+
+def test_fraction_reaching_total_is_exactly_100():
+    """n/n 은 정확히 100.0 이어야 종료 판정이 걸린다."""
+    assert read_percent(_label("762/762")) == 100.0
+
+
+def test_percent_wins_over_a_fraction_when_both_are_present():
+    """'%' 표시가 있으면 그것이 진행률이다. 옆의 쪽 번호에 흔들리면 안 된다."""
+    assert read_percent(_label("50% 100/200")) == 50.0
+
+
+@pytest.mark.parametrize("text", ["800/762", "762/0"])
+def test_read_percent_rejects_impossible_fractions(text):
+    """분자가 분모보다 크거나 분모가 0이면 진행률이 아니다."""
     assert read_percent(_label(text)) is None
 
 
