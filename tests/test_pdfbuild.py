@@ -3,7 +3,7 @@ import pytest
 from PIL import Image
 
 from ebook_capture.capture import save_page
-from ebook_capture.pdfbuild import build_pdf, collect_pages
+from ebook_capture.pdfbuild import build_pdf, collect_pages, trailing_duplicates
 
 
 def _make_pages(tmp_path, title, count, dpi=300):
@@ -81,3 +81,58 @@ def test_build_pdf_with_brackets_in_title(tmp_path):
     pdf = build_pdf(tmp_path, "책[개정판]")
     with pikepdf.open(pdf) as doc:
         assert len(doc.pages) == 2
+
+
+def _make_varied(tmp_path, title, shades):
+    """지정한 밝기대로 페이지를 만든다. 같은 값이면 같은 페이지가 된다."""
+    for i, shade in enumerate(shades, 1):
+        save_page(Image.new("RGB", (120, 160), (shade, shade, shade)), tmp_path, title, i)
+
+
+def test_trailing_duplicates_finds_the_run_at_the_end(tmp_path):
+    """책이 끝난 뒤 정지 감지가 확인하느라 찍은 여분 장을 골라낸다."""
+    _make_varied(tmp_path, "책", [10, 60, 110, 110, 110])
+    dupes = trailing_duplicates(collect_pages(tmp_path, "책"))
+    assert [p.name for p in dupes] == ["책_p004.jpg", "책_p005.jpg"]
+
+
+def test_trailing_duplicates_ignores_duplicates_in_the_middle(tmp_path):
+    """중간의 동일 페이지는 진짜 빈 페이지일 수 있다. 건드리면 안 된다."""
+    _make_varied(tmp_path, "책", [10, 60, 60, 110, 160])
+    assert trailing_duplicates(collect_pages(tmp_path, "책")) == []
+
+
+def test_trailing_duplicates_is_empty_when_every_page_differs(tmp_path):
+    _make_varied(tmp_path, "책", [10, 60, 110, 160])
+    assert trailing_duplicates(collect_pages(tmp_path, "책")) == []
+
+
+def test_trailing_duplicates_keeps_at_least_one_page(tmp_path):
+    """전부 같은 화면이어도 한 장은 남겨야 PDF 를 만들 수 있다."""
+    _make_varied(tmp_path, "책", [90, 90, 90])
+    dupes = trailing_duplicates(collect_pages(tmp_path, "책"))
+    assert len(dupes) == 2
+
+
+def test_build_pdf_excludes_trailing_duplicates_by_default(tmp_path):
+    _make_varied(tmp_path, "책", [10, 60, 110, 110, 110])
+    pdf = build_pdf(tmp_path, "책")
+    with pikepdf.open(pdf) as doc:
+        assert len(doc.pages) == 3
+    assert len(list(tmp_path.glob("책_p*.jpg"))) == 5, "JPG 원본은 그대로 남겨야 한다"
+
+
+def test_build_pdf_can_keep_trailing_duplicates(tmp_path):
+    _make_varied(tmp_path, "책", [10, 60, 110, 110, 110])
+    pdf = build_pdf(tmp_path, "책", drop_trailing_duplicates=False)
+    with pikepdf.open(pdf) as doc:
+        assert len(doc.pages) == 5
+
+
+def test_trailing_duplicates_survives_an_unreadable_file(tmp_path):
+    """파일 하나가 깨졌다고 PDF 생성 전체가 죽으면 안 된다."""
+    _make_varied(tmp_path, "책", [10, 60, 110])
+    (tmp_path / "책_p004.jpg").write_bytes(b"not an image")
+    pages = collect_pages(tmp_path, "책")
+    assert len(pages) == 4
+    assert trailing_duplicates(pages) == [], "확인 못 한 페이지는 지우지 않는다"

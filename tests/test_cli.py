@@ -89,7 +89,7 @@ def _install_fakes(monkeypatch, tmp_path, *, confirm="y", pages=3):
         events.append(f"start_page={start_page}")
         return start_page + pages, StopReason.COMPLETE
 
-    def fake_build_pdf(out_dir, title, page_size=None):
+    def fake_build_pdf(out_dir, title, page_size=None, drop_trailing_duplicates=True):
         events.append("build_pdf")
         path = Path(out_dir) / f"{title}.pdf"
         path.write_bytes(b"%PDF-1.4\n")
@@ -273,7 +273,7 @@ def test_main_reports_actual_merged_page_count(monkeypatch, tmp_path, capsys):
     """PDF 완료 메시지는 build_pdf가 실제로 병합한 장수를 보고해야 한다 (last_page가 아니라)."""
     events = _install_fakes(monkeypatch, tmp_path, pages=3)
 
-    def fake_build_pdf(out_dir, title, page_size=None):
+    def fake_build_pdf(out_dir, title, page_size=None, drop_trailing_duplicates=True):
         events.append("build_pdf")
         # 실제로는 한 장이 손으로 지워진 상황을 흉내낸다: last_page(3)보다 적게 병합됨.
         for i in (1, 2):
@@ -442,3 +442,42 @@ def test_save_previews_skips_the_loading_region_when_unset(tmp_path):
         interval=1.0,
     )
     assert len(save_previews(StubCapturer(), config, tmp_path)) == 2
+
+
+def test_parser_has_keep_duplicates_flag():
+    assert build_parser().parse_args([]).keep_duplicates is False
+    assert build_parser().parse_args(["--keep-duplicates"]).keep_duplicates is True
+
+
+def test_main_prints_a_startup_summary(monkeypatch, tmp_path, capsys):
+    """시작 전에 무엇을 어디에 저장할지 한눈에 보여준다."""
+    project = tmp_path / "책"
+    project.mkdir()
+    (project / "책_p001.jpg").write_bytes(b"x")
+    _install_fakes(monkeypatch, tmp_path, confirm=["d", "y"])
+    main(["--title", "책", "--interval", "0"])
+    out = capsys.readouterr().out
+    assert "시작 준비" in out, "요약 머리말이 있어야 한다"
+    for label in ("제목", "저장 위치", "기존 캡처", "캡처 간격", "안전 상한"):
+        assert label in out, f"요약에 '{label}' 이 없다"
+    assert "1장" in out, "기존 캡처 장수를 보여줘야 한다"
+
+
+def test_main_suggests_recording_when_loading_region_has_no_references(monkeypatch, tmp_path, capsys):
+    """로딩 영역만 켜고 그림을 등록하지 않았으면 등록 방법을 알려준다."""
+    from ebook_capture.session import SessionConfig as SC
+
+    project = tmp_path / "책"
+    project.mkdir()
+    SC(
+        title="책",
+        capture_region=Region(0, 0, 40, 40),
+        progress_region=Region(0, 100, 30, 20),
+        click_point=(10, 10),
+        interval=0.0,
+        loading_region=Region(0, 200, 25, 25),
+    ).save(project / "책.session.json")
+    _install_fakes(monkeypatch, tmp_path)
+    main(["--resume", "책"])
+    out = capsys.readouterr().out
+    assert "--record-loading" in out, "등록 방법을 안내해야 한다"

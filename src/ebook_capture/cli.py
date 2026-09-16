@@ -9,7 +9,7 @@ from .clicker import click
 from .display import list_displays, require_permissions
 from .geometry import Region
 from .naming import latest_page_number, sanitize_title
-from .pdfbuild import build_pdf, collect_pages
+from .pdfbuild import build_pdf, collect_pages, trailing_duplicates
 from .picker import AbortWatcher, pick_point, pick_region
 from .progress import load_loading_references, wait_for_loading
 from .session import SessionConfig, run_session
@@ -42,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="로딩 표시를 직접 촬영해 등록합니다 (여러 장)")
     p.add_argument("--load-timeout", type=float, default=30.0, metavar="초",
                    help="로딩을 기다리는 최대 시간 (기본 30)")
+    p.add_argument("--keep-duplicates", action="store_true",
+                   help="끝에 연달아 찍힌 동일 페이지도 PDF 에 넣습니다")
     return p
 
 
@@ -289,15 +291,28 @@ def main(argv: list[str] | None = None) -> int:
     # 제목마다 별도 폴더를 둔다. 여러 권을 캡처해도 result/ 가 섞이지 않는다.
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    reference_paths = _loading_reference_paths(result_root, args.loading_image)
-    loading_references = load_loading_references(reference_paths) if reference_paths else None
-    if config.loading_region is not None:
-        registered = f"등록된 로딩 그림 {len(reference_paths)}장" if reference_paths else "등록된 로딩 그림 없음 (변화 감지로만 판단)"
-        print(f"로딩 대기 사용: {registered}, 최대 {config.load_timeout:.0f}초")
-
     existing = collect_pages(project_dir, config.title)
     start_page = latest_page_number(existing)
     pending_delete: list[Path] = []
+
+    reference_paths = _loading_reference_paths(result_root, args.loading_image)
+    loading_references = load_loading_references(reference_paths) if reference_paths else None
+
+    print("\n=== 시작 준비 ===")
+    print(f"  제목        : {config.title}")
+    print(f"  저장 위치   : {project_dir}")
+    print(f"  기존 캡처   : {len(existing)}장" + (f" (마지막 p{start_page:03d})" if start_page else ""))
+    print(f"  캡처 간격   : {config.interval:g}초")
+    print(f"  안전 상한   : {config.max_pages}장")
+    if config.loading_region is None:
+        print("  로딩 대기   : 사용 안 함")
+    elif reference_paths:
+        print(f"  로딩 대기   : 등록 그림 {len(reference_paths)}장 + 변화 감지, 최대 {config.load_timeout:g}초")
+    else:
+        print(f"  로딩 대기   : 변화 감지만, 최대 {config.load_timeout:g}초")
+        print("     등록된 로딩 그림이 없습니다. 아래로 먼저 등록하면 더 정확해집니다:")
+        print("       ebook-capture --record-loading")
+
 
     if args.resume and start_page:
         print(f"기존 {start_page}쪽을 찾았습니다. p{start_page + 1:03d} 부터 이어서 캡처합니다.")
@@ -374,12 +389,19 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        pdf_path = build_pdf(project_dir, config.title, page_size=args.page_size)
+        pdf_path = build_pdf(project_dir, config.title, page_size=args.page_size,
+                             drop_trailing_duplicates=not args.keep_duplicates)
     except (ValueError, OSError) as exc:
         print(f"PDF 생성에 실패했습니다: {exc}")
         print(f"캡처한 이미지는 {project_dir} 에 그대로 있습니다. 문제를 고친 뒤 다시 시도하세요.")
         return 1
-    merged_pages = len(collect_pages(project_dir, config.title))
+    all_pages = collect_pages(project_dir, config.title)
+    skipped = [] if args.keep_duplicates else trailing_duplicates(all_pages)
+    merged_pages = len(all_pages) - len(skipped)
+    if skipped:
+        print(f"끝에 연달아 찍힌 동일 페이지 {len(skipped)}장은 PDF 에서 제외했습니다"
+              f" (p{skipped[0].stem.split('_p')[-1]} 부터). 이미지 파일은 그대로 있습니다.")
+        print("  모두 넣으려면 --keep-duplicates 를 쓰세요.")
     size_mb = pdf_path.stat().st_size / 1e6
     print(f"PDF 생성 완료: {pdf_path}  ({merged_pages}쪽, {size_mb:.1f} MB)")
     return 0
