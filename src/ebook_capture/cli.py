@@ -63,13 +63,18 @@ def save_previews(capturer, config: SessionConfig, out_dir: Path) -> list[Path]:
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    regions = [("capture", config.capture_region), ("progress", config.progress_region)]
+    if config.loading_region is not None:
+        regions.append(("loading", config.loading_region))
+
     paths = []
-    for label, region in (("capture", config.capture_region), ("progress", config.progress_region)):
+    for label, region in regions:
         image = capturer.grab(region)
         path = out_dir / f"_preview_{label}.png"
         image.save(path)
         paths.append(path)
-        if _is_single_color(image):
+        # 로딩 영역은 로딩이 아닐 때 빈 화면인 것이 정상이라 단색 경고를 내지 않는다.
+        if label != "loading" and _is_single_color(image):
             print(f"\n경고: '{label}' 미리보기가 완전한 단색 이미지입니다.")
             print("  화면 기록 권한이 실제로는 아직 적용되지 않았을 가능성이 높습니다")
             print("  (진짜로 빈 화면일 수도 있습니다 — 아래 미리보기를 직접 확인하세요).")
@@ -311,15 +316,21 @@ def main(argv: list[str] | None = None) -> int:
         pending_delete = existing
 
     with ScreenCapture() as capturer:
-        for path in save_previews(capturer, config, project_dir):
+        previews = save_previews(capturer, config, project_dir)
+        for path in previews:
             print(f"  미리보기 저장: {path}")
         try:
             answer = input("\n미리보기가 올바릅니까? 계속하려면 y: ").strip().lower()
         except EOFError:
             answer = ""
         if answer != "y":
+            # 취소했으면 무엇이 잘못됐는지 볼 수 있게 미리보기를 남겨둔다.
             print("취소했습니다.")
             return 1
+
+        # 확인이 끝났으면 미리보기는 역할을 다했다. 결과 폴더를 깨끗하게 둔다.
+        for path in previews:
+            path.unlink(missing_ok=True)
 
         # 미리보기 확인이 끝났으니 이제 실제로 기존 페이지를 지운다.
         if pending_delete:

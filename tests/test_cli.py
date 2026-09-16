@@ -320,7 +320,6 @@ def test_main_saves_into_a_per_title_directory(monkeypatch, tmp_path):
     project = tmp_path / "책"
     assert project.is_dir(), "프로젝트 폴더가 만들어져야 한다"
     assert (project / "책.session.json").exists()
-    assert (project / "_preview_capture.png").exists()
     assert (project / "책.pdf").exists()
     assert not (tmp_path / "책.session.json").exists(), "result/ 바로 아래에 쓰면 안 된다"
 
@@ -397,3 +396,49 @@ def test_loading_reference_paths_combines_flag_and_folder(tmp_path):
 
 def test_loading_reference_paths_is_empty_when_nothing_registered(tmp_path):
     assert cli_mod._loading_reference_paths(tmp_path, []) == []
+
+
+def test_main_removes_previews_after_the_user_confirms(monkeypatch, tmp_path):
+    """확인이 끝나면 미리보기는 역할을 다했다. 결과 폴더를 깨끗하게 둔다."""
+    _install_fakes(monkeypatch, tmp_path)
+    assert main(["--title", "책", "--interval", "0"]) == 0
+    project = tmp_path / "책"
+    assert not (project / "_preview_capture.png").exists()
+    assert not (project / "_preview_progress.png").exists()
+    assert (project / "책.pdf").exists(), "결과물까지 지우면 안 된다"
+    assert (project / "책.session.json").exists()
+
+
+def test_main_keeps_previews_when_the_user_declines(monkeypatch, tmp_path):
+    """취소했으면 무엇이 잘못됐는지 볼 수 있게 남겨둔다."""
+    _install_fakes(monkeypatch, tmp_path, confirm="n")
+    assert main(["--title", "책", "--interval", "0"]) == 1
+    project = tmp_path / "책"
+    assert (project / "_preview_capture.png").exists()
+    assert (project / "_preview_progress.png").exists()
+
+
+def test_save_previews_includes_the_loading_region_when_set(tmp_path):
+    """로딩 영역도 눈으로 확인할 수 있어야 한다. 잘못 잡으면 매 페이지 헛기다린다."""
+    config = SessionConfig(
+        title="책",
+        capture_region=Region(0, 0, 40, 40),
+        progress_region=Region(0, 100, 30, 20),
+        click_point=(10, 10),
+        interval=1.0,
+        loading_region=Region(0, 200, 25, 25),
+    )
+    previews = save_previews(StubCapturer(), config, tmp_path)
+    assert len(previews) == 3
+    assert any("loading" in p.name for p in previews)
+
+
+def test_save_previews_skips_the_loading_region_when_unset(tmp_path):
+    config = SessionConfig(
+        title="책",
+        capture_region=Region(0, 0, 40, 40),
+        progress_region=Region(0, 100, 30, 20),
+        click_point=(10, 10),
+        interval=1.0,
+    )
+    assert len(save_previews(StubCapturer(), config, tmp_path)) == 2
